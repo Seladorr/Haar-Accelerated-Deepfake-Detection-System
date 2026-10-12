@@ -1,41 +1,43 @@
-# Haar-Accelerated Deepfake Detection System
+# Haar-Accelerated Deepfake Detection
 
-Video deepfake detection using a **ResNeXt-50 + LSTM** classifier with **Squeeze-and-Excitation** and **Spatial Attention**, where the usual deep-CNN face-detection step (`face_recognition`) is replaced by OpenCV's lightweight **Haar Cascade** detector to make preprocessing much faster and dependency-light.
+This was our course project for DLCV (Deep Learning for Computer Vision) at IIT Kanpur. We're three undergrads who wanted to see if we could take a well-known deepfake detector and make it faster and lighter without wrecking the accuracy.
 
-Full write-up: [`dlcv_final.pdf`](dlcv_final.pdf) — *Deepfake Detection with Lightweight Attention-Based Architecture*.
+The detector we started from is the usual **ResNeXt + LSTM** setup: a CNN looks at each frame, an LSTM looks at how frames change over time, and deepfakes tend to slip up on both. The annoying part was the very first step — finding the face in every frame using the `face_recognition` library. It's slow, it drags in `dlib`, and it was a pain to install on our laptops.
 
-## How it works
+So we did two things:
+
+1. **Swapped the face detector for OpenCV's Haar Cascade.** Yes, the old-school Viola-Jones one from 2001. It's not fancy, but deepfake datasets are mostly people looking straight at the camera, and for that it works fine. In our tests it was up to ~5× faster.
+2. **Added a bit of attention to the model.** We put a Squeeze-and-Excitation block and a spatial attention block on top of the ResNeXt features, plus a small residual head at the end.
+
+Our full report is in [`dlcv_final.pdf`](dlcv_final.pdf) if you want the details.
+
+## The pipeline
 
 ```
-input video ──► extract ≤150 frames ──► Haar Cascade face detect (grayscale)
-            ──► crop first face, resize 112×112 ──► face-only .mp4
-            ──► ResNeXt-50 (ImageNet) feature maps ──► SE block ──► Spatial Attention ──► avg-pool (2048-d / frame)
-            ──► LSTM (1 layer, 2048 hidden) ──► LayerNorm ──► mean over time
-            ──► residual head (FC ─ GELU ─ Dropout 0.4 ─ +skip ─ FC) ──► REAL / FAKE
+video ─► grab up to 150 frames ─► Haar Cascade finds the face ─► crop + resize to 112×112
+      ─► ResNeXt-50 features ─► SE block ─► spatial attention ─► one 2048-d vector per frame
+      ─► LSTM over the frames ─► average ─► small residual classifier ─► REAL or FAKE
 ```
 
-At prediction time the class-activation map of the last frame is overlaid on the face and saved as a heatmap (`enhanced_heatmap.png`).
+When predicting, we also draw a heatmap over the face showing where the model was "looking" (`enhanced_heatmap.png`).
 
-## Repository layout
+## What's in here
 
-| Path | What it is |
+| File / folder | What it is |
 |---|---|
-| `New_preprocessing (1).ipynb` | **Step 1** – Haar Cascade face cropping: `real_yt/` → `real_yt_face_videos/`, `fake_yt/` → `fake_yt_face_videos/` |
-| `New_Model_and_train.ipynb` | **Step 2** – dataset loading, 80/20 split, `EnhancedModel` definition and training |
-| `New_Predict.ipynb` | **Step 3** – load a checkpoint, classify videos, generate heatmaps |
-| `Codefiles/` | Baseline pipeline (`face_recognition` preprocessing + plain ResNeXt-LSTM `Model`). Contains the `train_epoch` / `test` / `AverageMeter` / `calculate_accuracy` helpers |
-| `Old_preprocessing.ipynb`, `Predict.ipynb`, `Model_and_train_csv.ipynb` | Earlier baseline versions |
-| `New_Model_and_train copy.ipynb` | Experimental EfficientNet-B3 + channel-attention variant |
-| `final_model/checkpoint{1-4}.pt` | Weights for the **enhanced** model (`EnhancedModel`) — `checkpoint3.pt` is the one used in `New_Predict.ipynb` |
-| `model/checkpoint*.pt` | Weights for the **baseline** ResNeXt-LSTM (`Model`) |
-| `DeepfakeDetector/`, `Codefiles/checkpoint.pt`, `PREV_VID/checkpoint.pt`, `trial2*.pt` | Intermediate / experimental checkpoints |
-| `*.png` | Training curves, overfitting plots and prediction heatmaps |
+| `New_preprocessing.ipynb` | Step 1: crops faces out of the raw videos with Haar Cascade |
+| `New_Model_and_train.ipynb` | Step 2: builds the model and trains it |
+| `New_Predict.ipynb` | Step 3: loads a trained model and tells you if a video is real or fake |
+| `final_model/` | Trained weights for our final model (`checkpoint3.pt` is the one we use for predictions) |
+| `model/` | Weights for the original ResNeXt + LSTM, without our changes, for comparison |
+| `Codefiles/`, `Old_preprocessing.ipynb`, `Predict.ipynb`, `Model_and_train_csv.ipynb` | Our earlier attempts using `face_recognition`. Kept around for reference |
+| `Experimental_EfficientNet_train.ipynb` | We also tried EfficientNet-B3 as the backbone. Didn't end up using it |
+| `DeepfakeDetector/`, `trial2*.pt`, `PREV_VID/`, `Codefiles/checkpoint.pt` | Checkpoints from various experiments along the way |
+| `*.png` | Training curves, overfitting plots, heatmaps |
 
-## Setup
+## Getting it running
 
-### 1. Clone (with the model weights)
-
-The `.pt` checkpoints (~3 GB) are stored with **Git LFS**. Install it first, otherwise you'll only get small pointer files:
+**1. Clone it.** The model weights use Git LFS, so install that first or you'll just get tiny placeholder files instead of the actual `.pt` files.
 
 ```bash
 git lfs install
@@ -43,84 +45,83 @@ git clone https://github.com/Seladorr/Haar-Accelerated-Deepfake-Detection-System
 cd Haar-Accelerated-Deepfake-Detection-System
 ```
 
-### 2. Python environment
-
-Python 3.9+ is recommended.
+**2. Install the stuff.** We used Python 3.9.
 
 ```bash
 python -m venv venv
-# Windows: venv\Scripts\activate   |   Linux/macOS: source venv/bin/activate
-pip install torch torchvision opencv-python numpy matplotlib scikit-learn seaborn pandas tqdm jupyter
+venv\Scripts\activate          # on Linux/Mac: source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-A CUDA GPU (or Apple Silicon `mps`) is strongly recommended for training. `face_recognition` (which needs `dlib`) is only required for the baseline notebooks in `Codefiles/` — the Haar pipeline doesn't use it, so you can delete that import from the notebooks if you don't want to install it.
+Heads up: OpenCV 5 moved the Haar Cascade stuff out of the main package, so `requirements.txt` pins `opencv-python<5`. Don't upgrade it or the face detection breaks.
 
-### 3. Dataset
+The notebooks will use your GPU if you have one (CUDA or Apple Silicon), otherwise CPU. Training on CPU will take forever, but predicting is fine.
 
-Videos are **not** included in this repo (too large). The project used a balanced subset of **FaceForensics++**: 1,000 real and 1,000 deepfake videos. Place them like this in the project root:
+**3. Get the videos.** We used 1,000 real and 1,000 fake videos from **FaceForensics++**. Put them in the project folder like this:
 
 ```
-real_yt/   *.mp4   (real videos)
-fake_yt/   *.mp4   (deepfake videos)
+real_yt/   ← real videos (.mp4)
+fake_yt/   ← fake videos (.mp4)
 ```
 
-## Running
-
-Launch Jupyter from the project root (all notebook paths are relative to it):
+**4. Open Jupyter** from the project folder (all the paths in the notebooks are relative):
 
 ```bash
 jupyter notebook
 ```
 
-### Step 1 – Preprocess (Haar Cascade face cropping)
-Run all cells of **`New_preprocessing (1).ipynb`**. For every video it reads up to 150 frames, detects the face with `haarcascade_frontalface_default.xml`, crops & resizes it to 112×112 and writes it to `real_yt_face_videos/` / `fake_yt_face_videos/`. Already-processed videos are skipped, so it is safe to re-run.
+### Step 1: crop the faces
 
-### Step 2 – Train
-Open **`New_Model_and_train.ipynb`** and run the cells in order.
+Run everything in `New_preprocessing.ipynb`. It goes through each video, finds the face in each frame, crops it to 112×112 and saves a new face-only video into `real_yt_face_videos/` and `fake_yt_face_videos/`. It skips videos it's already done, so you can stop and restart it.
 
-- Labels: `1 = REAL`, `0 = FAKE`; stratified 80/20 split (`random_state=42`) → 1,600 train / 400 val.
-- Settings: sequence length 10 frames, batch size 4, Adam (`lr=1e-5`, `weight_decay=1e-5`), cross-entropy, 20 epochs.
-- The training-loop helpers (`train_epoch`, `test`, `AverageMeter`, `calculate_accuracy`) live in `Codefiles/New_Model_and_train.ipynb` — copy that cell in and run it before the training cell. `train_epoch` saves weights to `./checkpoint.pt` after every epoch.
-- The device line is set to `mps`/`cpu`; on an NVIDIA GPU change it to `torch.device("cuda" if torch.cuda.is_available() else "cpu")`.
+### Step 2: train
 
-### Step 3 – Predict
-Open **`New_Predict.ipynb`**:
+Run `New_Model_and_train.ipynb` top to bottom. What we used:
 
-1. Run the model-definition and helper cells.
-2. Point `path_to_model` at a checkpoint, e.g. `./final_model/checkpoint3.pt` (the notebook currently has an absolute macOS path — change it). If you're on a CPU-only machine use `torch.load(path, map_location="cpu")`.
-3. Set `path_to_videos` to the videos you want to test and run the prediction cell. It prints `REAL` / `FAKE` with a confidence score and saves the attention heatmap to `enhanced_heatmap.png`.
+- 80/20 split → 1,600 videos to train on, 400 to test on
+- 10 frames per video, batch size 4
+- Adam, learning rate `1e-5`, weight decay `1e-5`, 20 epochs
+- Labels: `1` = real, `0` = fake
 
-Example output from the notebook:
+It saves `checkpoint.pt` after every epoch. If you just want to use our weights, skip the training cell and run the "Load a saved checkpoint" one instead.
+
+### Step 3: predict
+
+Run `New_Predict.ipynb`. It loads `final_model/checkpoint3.pt`. To try your own videos, change `path_to_videos`:
+
+- normal videos → `crop_faces=True` (it'll find the faces for you)
+- videos you already ran through step 1 → `crop_faces=False`
+
+You'll get REAL/FAKE, a confidence score, and the heatmap. At the end there's a section that runs the original model on the same videos so you can compare.
+
+What it looks like:
 
 ```
-./real_yt/130.mp4          confidence 98.47  → REAL
-fake_yt/042_084.mp4        confidence 97.66  → FAKE
+./real_yt/130.mp4       confidence 98.96  → REAL   ✓
+fake_yt/042_084.mp4     confidence 99.03  → FAKE   ✓
+fake_yt/295_099.mp4     confidence 57.52  → REAL   ✗  (this one fools it)
 ```
 
-## Results
+## How well does it work?
 
-Enhanced model on the 400-video validation split (label order: Fake, Real):
+Honestly, okay but not amazing. On the 400 test videos:
 
-|              | Pred. Fake | Pred. Real |
+|                 | said Fake | said Real |
 |---|---|---|
-| **Actual Fake** | 129 | 71 |
-| **Actual Real** | 35 | 165 |
+| **actually Fake** | 129 | 71 |
+| **actually Real** | 35 | 165 |
 
-Accuracy **73.5%** from this confusion matrix (the report quotes 76.5%; the best per-epoch validation accuracy logged during training was 76.0%). The model catches real videos well but produces a fair number of fake→real misses; training curves (`New-overfit-1.png`, `New-Overfit2.png`) show overfitting after ~3 epochs, so more data / stronger augmentation is the main avenue for improvement.
+That's **73.5%** accuracy (best single epoch during training hit 76%). It's pretty good at recognising real videos, but lets a fair number of fakes through. The training curves (`New-overfit-1.png`, `New-Overfit2.png`) show it starts overfitting after about 3 epochs. With more data or better augmentation it would probably do better; we just ran out of time (and GPU).
 
-Haar Cascade preprocessing ran up to ~5× faster than the `face_recognition` CNN detector in our tests, with no extra deep-learning dependency.
+The main win was speed: the Haar Cascade preprocessing was way faster than `face_recognition`, and we didn't need to install any extra deep learning libraries just to find faces.
 
-## Limitations
+## Things it's bad at
 
-- Haar Cascades only handle reasonably frontal, well-lit faces; profile or occluded faces are skipped.
-- Only the first detected face per frame is used.
-- Trained on a small FaceForensics++ subset, so generalisation to other generators is untested.
+- Faces that aren't facing the camera. Haar Cascade just doesn't find them.
+- Videos with more than one person. We only take the first face it finds.
+- Other kinds of deepfakes. We only trained on a small slice of FaceForensics++, so who knows how it does on anything else.
 
-## Authors
-
-Harsh Oza, Satish Panda, Shreyash Kumar, Neerav Sethi — DLCV course project, IIT Kanpur.
-
-## References
+## Stuff we built on
 
 - Hu et al., *Squeeze-and-Excitation Networks*, CVPR 2018
 - Woo et al., *CBAM: Convolutional Block Attention Module*, ECCV 2018
