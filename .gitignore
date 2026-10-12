@@ -1,0 +1,14 @@
+# OS junk
+.DS_Store
+__MACOSX/
+
+# Video data (too large; not pushed)
+*.mp4
+*.avi
+*.mov
+
+# Archives
+*.zip
+
+# Notebook checkpoints
+.ipynb_checkpoints/
